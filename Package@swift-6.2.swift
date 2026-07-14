@@ -42,6 +42,10 @@ let package = Package(
             name: "whisperkit-cli",
             targets: ["ArgmaxCLI"]
         ),
+        .executable(
+            name: "emission-bound-contract-probe",
+            targets: ["EmissionBoundContractProbe"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.7.0"),
@@ -97,6 +101,14 @@ let package = Package(
             resources: [
                 .process("Resources"),
             ],
+            swiftSettings: swiftSettings(libraryEvolution: false)
+        ),
+        .executableTarget(
+            name: "EmissionBoundContractProbe",
+            dependencies: [
+                "WhisperKit",
+            ],
+            path: "Tests/EmissionBoundContractProbe",
             swiftSettings: swiftSettings(libraryEvolution: false)
         ),
         .testTarget(

@@ -9,6 +9,140 @@ public protocol ResultWriting {
     func formatTime(seconds: Float, alwaysIncludeHours: Bool, decimalMarker: String) -> String
 }
 
+public enum TranscriptionEmissionBoundError: Error, Equatable, LocalizedError {
+    case invalidAllowedCoordinateInterval(lowerBound: Float, upperBound: Float)
+    case segmentCoordinateOutsideAllowedInterval(
+        segmentIndex: Int,
+        start: Float,
+        end: Float,
+        lowerBound: Float,
+        upperBound: Float
+    )
+    case wordCoordinateOutsideAllowedInterval(
+        segmentIndex: Int,
+        wordIndex: Int,
+        start: Float,
+        end: Float,
+        lowerBound: Float,
+        upperBound: Float
+    )
+
+    public var errorDescription: String? {
+        switch self {
+            case let .invalidAllowedCoordinateInterval(lowerBound, upperBound):
+                return "Invalid allowed coordinate interval [\(lowerBound), \(upperBound)]."
+            case let .segmentCoordinateOutsideAllowedInterval(
+                segmentIndex,
+                start,
+                end,
+                lowerBound,
+                upperBound
+            ):
+                return "Segment \(segmentIndex) coordinates [\(start), \(end)] are outside allowed interval [\(lowerBound), \(upperBound)]."
+            case let .wordCoordinateOutsideAllowedInterval(
+                segmentIndex,
+                wordIndex,
+                start,
+                end,
+                lowerBound,
+                upperBound
+            ):
+                return "Word \(wordIndex) in segment \(segmentIndex) has coordinates [\(start), \(end)] outside allowed interval [\(lowerBound), \(upperBound)]."
+        }
+    }
+}
+
+public struct AllowedCoordinateInterval: Equatable, Sendable {
+    public let lowerBound: Float
+    public let upperBound: Float
+
+    public init(lowerBound: Float, upperBound: Float) throws {
+        guard lowerBound.isFinite,
+              upperBound.isFinite,
+              lowerBound <= upperBound
+        else {
+            throw TranscriptionEmissionBoundError.invalidAllowedCoordinateInterval(
+                lowerBound: lowerBound,
+                upperBound: upperBound
+            )
+        }
+        self.lowerBound = lowerBound
+        self.upperBound = upperBound
+    }
+
+    public func validate(result: TranscriptionResult) throws {
+        for (segmentIndex, segment) in result.segments.enumerated() {
+            guard contains(segment.start), contains(segment.end) else {
+                throw TranscriptionEmissionBoundError.segmentCoordinateOutsideAllowedInterval(
+                    segmentIndex: segmentIndex,
+                    start: segment.start,
+                    end: segment.end,
+                    lowerBound: lowerBound,
+                    upperBound: upperBound
+                )
+            }
+            for (wordIndex, word) in (segment.words ?? []).enumerated() {
+                guard contains(word.start), contains(word.end) else {
+                    throw TranscriptionEmissionBoundError.wordCoordinateOutsideAllowedInterval(
+                        segmentIndex: segmentIndex,
+                        wordIndex: wordIndex,
+                        start: word.start,
+                        end: word.end,
+                        lowerBound: lowerBound,
+                        upperBound: upperBound
+                    )
+                }
+            }
+        }
+    }
+
+    private func contains(_ value: Float) -> Bool {
+        value.isFinite && value >= lowerBound && value <= upperBound
+    }
+}
+
+public struct TranscriptionReportPaths: Equatable, Sendable {
+    public let srt: String
+    public let json: String
+}
+
+public struct BoundedTranscriptionReportWriter {
+    public let outputDir: String
+
+    public init(outputDir: String) {
+        self.outputDir = outputDir
+    }
+
+    public func write(
+        result: TranscriptionResult,
+        to file: String,
+        allowedCoordinateInterval: AllowedCoordinateInterval
+    ) -> Result<TranscriptionReportPaths, Error> {
+        do {
+            try allowedCoordinateInterval.validate(result: result)
+        } catch {
+            return .failure(error)
+        }
+
+        let savedSrtReport = WriteSRT(outputDir: outputDir).write(result: result, to: file)
+        let srtPath: String
+        switch savedSrtReport {
+            case let .success(path):
+                srtPath = path
+            case let .failure(error):
+                return .failure(error)
+        }
+
+        let savedJsonReport = WriteJSON(outputDir: outputDir).write(result: result, to: file)
+        switch savedJsonReport {
+            case let .success(path):
+                return .success(TranscriptionReportPaths(srt: srtPath, json: path))
+            case let .failure(error):
+                return .failure(error)
+        }
+    }
+}
+
 public extension ResultWriting {
     /// Format a time value as a string
     func formatTime(seconds: Float, alwaysIncludeHours: Bool, decimalMarker: String) -> String {
@@ -57,7 +191,7 @@ open class WriteJSON: ResultWriting {
         jsonEncoder.outputFormatting = .prettyPrinted
         do {
             let reportJson = try jsonEncoder.encode(result)
-            try reportJson.write(to: reportURL)
+            try reportJson.write(to: reportURL, options: .atomic)
         } catch {
             return .failure(error)
         }

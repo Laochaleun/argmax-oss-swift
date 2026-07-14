@@ -17,6 +17,13 @@ struct TranscribeCLI: AsyncParsableCommand {
     @OptionGroup
     var cliArguments: TranscribeCLIArguments
 
+    @Option(
+        name: .customLong("allowed-coordinate-interval"),
+        parsing: .upToNextOption,
+        help: "Required with --report. Exactly two request-clip-local bounds: lower upper."
+    )
+    var allowedCoordinateInterval: [Float] = []
+
     @Flag(name: .long, help: "Enable speaker diarization")
     var diarization: Bool = false
 
@@ -54,6 +61,8 @@ struct TranscribeCLI: AsyncParsableCommand {
         if ChunkingStrategy(rawValue: cliArguments.chunkingStrategy) == nil {
             throw ValidationError("Wrong chunking strategy \"\(cliArguments.chunkingStrategy)\", valid strategies: \(ChunkingStrategy.allCases.map { $0.rawValue })")
         }
+
+        _ = try reportAllowedCoordinateInterval()
     }
 
     mutating func run() async throws {
@@ -219,6 +228,15 @@ struct TranscribeCLI: AsyncParsableCommand {
             decodeOptions: options
         )
 
+        let reportCoordinateInterval = try reportAllowedCoordinateInterval()
+        if let reportCoordinateInterval {
+            for result in transcribeResult {
+                guard case let .success(partialResult) = result else { continue }
+                let mergedPartialResult = TranscriptionUtilities.mergeTranscriptionResults(partialResult)
+                try reportCoordinateInterval.validate(result: mergedPartialResult)
+            }
+        }
+
         if cliArguments.verbose {
             // Indicate that transcription is done
             await progressState.stopTranscribing()
@@ -251,13 +269,19 @@ struct TranscribeCLI: AsyncParsableCommand {
         }
 
         for (audioPath, result) in zip(resolvedAudioPaths, transcribeResult) {
+            let partialResult: [TranscriptionResult]
             do {
-                let partialResult = try result.get()
-                let mergedPartialResult = TranscriptionUtilities.mergeTranscriptionResults(partialResult)
-                processTranscriptionResult(audioPath: audioPath, transcribeResult: mergedPartialResult)
+                partialResult = try result.get()
             } catch {
                 print("Error when transcribing \(audioPath): \(error)")
+                continue
             }
+            let mergedPartialResult = TranscriptionUtilities.mergeTranscriptionResults(partialResult)
+            try processTranscriptionResult(
+                audioPath: audioPath,
+                transcribeResult: mergedPartialResult,
+                allowedCoordinateInterval: reportCoordinateInterval
+            )
         }
 
         if diarization {
@@ -420,7 +444,11 @@ struct TranscribeCLI: AsyncParsableCommand {
 
         let mergedResult = TranscriptionUtilities.mergeTranscriptionResults(results, confirmedWords: confirmedWords)
 
-        processTranscriptionResult(audioPath: audioPath, transcribeResult: mergedResult)
+        try processTranscriptionResult(
+            audioPath: audioPath,
+            transcribeResult: mergedResult,
+            allowedCoordinateInterval: reportAllowedCoordinateInterval()
+        )
     }
 
 
@@ -464,8 +492,9 @@ struct TranscribeCLI: AsyncParsableCommand {
 
     private func processTranscriptionResult(
         audioPath: String,
-        transcribeResult: TranscriptionResult?
-    ) {
+        transcribeResult: TranscriptionResult?,
+        allowedCoordinateInterval: AllowedCoordinateInterval?
+    ) throws {
         if cliArguments.verbose {
             print("\nProcessing transcription result for: \(audioPath)")
         }
@@ -479,32 +508,26 @@ struct TranscribeCLI: AsyncParsableCommand {
                 print("\nGenerating reports...")
             }
 
-            // Write SRT (SubRip Subtitle Format) for the transcription
-            let srtReportWriter = WriteSRT(outputDir: cliArguments.reportPath)
-            if cliArguments.verbose {
-                print("Writing SRT report to: \(cliArguments.reportPath)")
+            guard let allowedCoordinateInterval else {
+                throw ValidationError(
+                    "--allowed-coordinate-interval is required when --report is enabled."
+                )
             }
-
-            let savedSrtReport = srtReportWriter.write(result: result, to: audioFileName)
-            if cliArguments.verbose {
-                switch savedSrtReport {
-                    case let .success(reportPath):
-                        print("\n\nSaved SRT Report: \n\n\(reportPath)\n")
-                    case let .failure(error):
-                        print("\n\nCouldn't save report: \(error)\n")
-                }
-            }
-
-            // Write JSON for all metadata
-            let jsonReportWriter = WriteJSON(outputDir: cliArguments.reportPath)
-            let savedJsonReport = jsonReportWriter.write(result: result, to: audioFileName)
-            if cliArguments.verbose {
-                switch savedJsonReport {
-                    case let .success(reportPath):
-                        print("\n\nSaved JSON Report: \n\n\(reportPath)\n")
-                    case let .failure(error):
-                        print("\n\nCouldn't save report: \(error)\n")
-                }
+            let reportWriter = BoundedTranscriptionReportWriter(
+                outputDir: cliArguments.reportPath
+            )
+            switch reportWriter.write(
+                result: result,
+                to: audioFileName,
+                allowedCoordinateInterval: allowedCoordinateInterval
+            ) {
+                case let .success(reportPaths):
+                    if cliArguments.verbose {
+                        print("\n\nSaved SRT Report: \n\n\(reportPaths.srt)\n")
+                        print("\n\nSaved JSON Report: \n\n\(reportPaths.json)\n")
+                    }
+                case let .failure(error):
+                    throw error
             }
         }
 
@@ -512,6 +535,23 @@ struct TranscribeCLI: AsyncParsableCommand {
             print("\n\nTranscription of \(audioFile): \n\n\(transcription)\n")
         } else {
             print(transcription)
+        }
+    }
+
+    private func reportAllowedCoordinateInterval() throws -> AllowedCoordinateInterval? {
+        guard cliArguments.report else { return nil }
+        guard allowedCoordinateInterval.count == 2 else {
+            throw ValidationError(
+                "--allowed-coordinate-interval requires exactly two bounds when --report is enabled."
+            )
+        }
+        do {
+            return try AllowedCoordinateInterval(
+                lowerBound: allowedCoordinateInterval[0],
+                upperBound: allowedCoordinateInterval[1]
+            )
+        } catch {
+            throw ValidationError(error.localizedDescription)
         }
     }
 
