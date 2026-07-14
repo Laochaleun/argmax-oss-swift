@@ -188,7 +188,7 @@ struct EmissionBoundContractProbe {
 
     private static func proveEmptyAlignmentRowsFailClosed() throws {
         let seeker = SegmentSeeker()
-        let alignmentWeights = try MLMultiArray(shape: [1, 2], dataType: .float16)
+        let alignmentWeights = try MLMultiArray(shape: [2, 2], dataType: .float16)
         let domain = try makeDomain(samples: 321)
         let emptySegment = TranscriptionSegment(
             start: 0,
@@ -210,12 +210,7 @@ struct EmissionBoundContractProbe {
             options: DecodingOptions(wordTimestamps: true),
             timings: TranscriptionTimings()
         )
-        guard preserved?.count == 1,
-              preserved?[0].start == emptySegment.start,
-              preserved?[0].end == emptySegment.end,
-              preserved?[0].text == emptySegment.text,
-              preserved?[0].tokens == emptySegment.tokens
-        else {
+        guard preserved == [emptySegment] else {
             throw ProbeError("empty alignment control changed legal segment values")
         }
 
@@ -226,25 +221,39 @@ struct EmissionBoundContractProbe {
             tokens: [],
             tokenLogProbs: []
         )
-        do {
-            _ = try seeker.addWordTimestamps(
-                segments: [nonemptySegment],
-                alignmentWeights: alignmentWeights,
-                tokenizer: ProbeTokenizer(),
-                seek: 0,
-                segmentSize: 321,
-                realAudioSelectionDomain: domain,
-                prependPunctuations: Constants.defaultPrependPunctuations,
-                appendPunctuations: Constants.defaultAppendPunctuations,
-                lastSpeechTimestamp: 0,
-                options: DecodingOptions(wordTimestamps: true),
-                timings: TranscriptionTimings()
-            )
-            throw ProbeError("non-empty text without alignment rows was accepted")
-        } catch let error as ProbeError {
-            throw error
-        } catch {
-            // Expected fail-closed alignment rejection.
+        let tokenizedSibling = TranscriptionSegment(
+            start: 0,
+            end: 0.02,
+            text: "tokenized",
+            tokens: [1],
+            tokenLogProbs: [[1: 0]]
+        )
+        let invalidCases = [
+            [nonemptySegment],
+            [tokenizedSibling, nonemptySegment],
+        ]
+        for invalidSegments in invalidCases {
+            var rejected = false
+            do {
+                _ = try seeker.addWordTimestamps(
+                    segments: invalidSegments,
+                    alignmentWeights: alignmentWeights,
+                    tokenizer: ProbeTokenizer(),
+                    seek: 0,
+                    segmentSize: 321,
+                    realAudioSelectionDomain: domain,
+                    prependPunctuations: Constants.defaultPrependPunctuations,
+                    appendPunctuations: Constants.defaultAppendPunctuations,
+                    lastSpeechTimestamp: 0,
+                    options: DecodingOptions(wordTimestamps: true),
+                    timings: TranscriptionTimings()
+                )
+            } catch {
+                rejected = true
+            }
+            guard rejected else {
+                throw ProbeError("non-empty text without per-segment alignment rows was accepted")
+            }
         }
     }
 
