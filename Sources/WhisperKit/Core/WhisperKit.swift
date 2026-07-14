@@ -892,6 +892,13 @@ open class WhisperKit {
                 // Reset the seek times since we've already chunked the audio
                 var chunkedOptions = decodeOptions
                 chunkedOptions?.clipTimestamps = []
+                if chunkedOptions?.allowedCoordinateInterval != nil {
+                    let windowSamples = featureExtractor.windowSamples ?? Constants.defaultWindowSamples
+                    chunkedOptions?.allowedCoordinateInterval = try AllowedCoordinateInterval(
+                        lowerBound: 0,
+                        upperBound: Float(windowSamples) / Float(WhisperKit.sampleRate)
+                    )
+                }
                 let chunkedDecodeOptions = Array(repeating: chunkedOptions, count: audioChunks.count)
 
                 // Send chunked samples to transcribe (note: this is recursive)
@@ -903,10 +910,19 @@ open class WhisperKit {
                 )
 
                 // Update the seek offsets based on the audio chunks
-                let updatedTranscriptionResults = chunker.updateSeekOffsetsForResults(
-                    chunkedResults: chunkedResults,
-                    audioChunks: audioChunks
-                )
+                let updatedTranscriptionResults: [TranscriptionResult]
+                if let allowedCoordinateInterval = decodeOptions?.allowedCoordinateInterval {
+                    updatedTranscriptionResults = try chunker.updateSeekOffsetsForResults(
+                        chunkedResults: chunkedResults,
+                        audioChunks: audioChunks,
+                        allowedCoordinateInterval: allowedCoordinateInterval
+                    )
+                } else {
+                    updatedTranscriptionResults = chunker.updateSeekOffsetsForResults(
+                        chunkedResults: chunkedResults,
+                        audioChunks: audioChunks
+                    )
+                }
 
                 transcribeResults = updatedTranscriptionResults
             default:

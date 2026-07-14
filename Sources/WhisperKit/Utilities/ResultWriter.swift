@@ -52,7 +52,7 @@ public enum TranscriptionEmissionBoundError: Error, Equatable, LocalizedError {
     }
 }
 
-public struct AllowedCoordinateInterval: Equatable, Sendable {
+public struct AllowedCoordinateInterval: Codable, Equatable, Sendable {
     public let lowerBound: Float
     public let upperBound: Float
 
@@ -70,8 +70,43 @@ public struct AllowedCoordinateInterval: Equatable, Sendable {
         self.upperBound = upperBound
     }
 
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            lowerBound: values.decode(Float.self, forKey: .lowerBound),
+            upperBound: values.decode(Float.self, forKey: .upperBound)
+        )
+    }
+
     public func validate(result: TranscriptionResult) throws {
-        for (segmentIndex, segment) in result.segments.enumerated() {
+        try validate(segments: result.segments)
+    }
+
+    public func validateBeforeEmission(
+        segments: [TranscriptionSegment],
+        segmentIndexOffset: Int,
+        windowSeek: Int,
+        windowSegmentSize: Int,
+        sampleRate: Int
+    ) throws {
+        try validate(segments: segments, segmentIndexOffset: segmentIndexOffset)
+        let windowLowerBound = Float(windowSeek) / Float(sampleRate)
+        let windowInterval = try AllowedCoordinateInterval(
+            lowerBound: windowLowerBound,
+            upperBound: windowLowerBound + Float(windowSegmentSize) / Float(sampleRate)
+        )
+        try windowInterval.validate(
+            segments: segments,
+            segmentIndexOffset: segmentIndexOffset
+        )
+    }
+
+    public func validate(
+        segments: [TranscriptionSegment],
+        segmentIndexOffset: Int = 0
+    ) throws {
+        for (localSegmentIndex, segment) in segments.enumerated() {
+            let segmentIndex = segmentIndexOffset + localSegmentIndex
             guard contains(segment.start), contains(segment.end) else {
                 throw TranscriptionEmissionBoundError.segmentCoordinateOutsideAllowedInterval(
                     segmentIndex: segmentIndex,
@@ -98,6 +133,11 @@ public struct AllowedCoordinateInterval: Equatable, Sendable {
 
     private func contains(_ value: Float) -> Bool {
         value.isFinite && value >= lowerBound && value <= upperBound
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case lowerBound
+        case upperBound
     }
 }
 

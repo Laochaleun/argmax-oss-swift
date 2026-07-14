@@ -190,6 +190,18 @@ open class TranscribeTask {
                     tokenizer: tokenizer
                 )
 
+                if let allowedCoordinateInterval = options.allowedCoordinateInterval,
+                   let currentSegments
+                {
+                    try allowedCoordinateInterval.validateBeforeEmission(
+                        segments: currentSegments,
+                        segmentIndexOffset: allSegments.count,
+                        windowSeek: windowSeek,
+                        windowSegmentSize: segmentSize,
+                        sampleRate: WhisperKit.sampleRate
+                    )
+                }
+
                 // Update seek point without moving backward
                 seek = max(seek, newSeek)
 
@@ -213,6 +225,18 @@ open class TranscribeTask {
 
                     timings.decodingWordTimestamps += Date().timeIntervalSince(wordTimestampsStart)
                     timings.totalTimestampAlignmentRuns += 1
+
+                    if let allowedCoordinateInterval = options.allowedCoordinateInterval,
+                       let currentSegments
+                    {
+                        try allowedCoordinateInterval.validateBeforeEmission(
+                            segments: currentSegments,
+                            segmentIndexOffset: allSegments.count,
+                            windowSeek: windowSeek,
+                            windowSegmentSize: segmentSize,
+                            sampleRate: WhisperKit.sampleRate
+                        )
+                    }
 
                     // Filter out zero length segments
                     currentSegments = currentSegments?.filter { $0.end > $0.start }
@@ -248,6 +272,16 @@ open class TranscribeTask {
                     segmentSize: segmentSize,
                     originalSegments: currentSegments
                 )
+
+                if let allowedCoordinateInterval = options.allowedCoordinateInterval {
+                    try allowedCoordinateInterval.validateBeforeEmission(
+                        segments: processedSegments,
+                        segmentIndexOffset: allSegments.count,
+                        windowSeek: windowSeek,
+                        windowSegmentSize: segmentSize,
+                        sampleRate: WhisperKit.sampleRate
+                    )
+                }
 
                 if options.verbose {
                     let lines = TranscriptionUtilities.formatSegments(processedSegments)

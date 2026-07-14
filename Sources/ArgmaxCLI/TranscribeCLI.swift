@@ -130,6 +130,8 @@ struct TranscribeCLI: AsyncParsableCommand {
         }
 
         var options = TranscribeCLIUtils.createDecodingOptions(from: cliArguments, task: task)
+        let reportCoordinateInterval = try reportAllowedCoordinateInterval()
+        options.allowedCoordinateInterval = reportCoordinateInterval
         if diarization {
             options.wordTimestamps = true
         }
@@ -228,12 +230,17 @@ struct TranscribeCLI: AsyncParsableCommand {
             decodeOptions: options
         )
 
-        let reportCoordinateInterval = try reportAllowedCoordinateInterval()
         if let reportCoordinateInterval {
             for result in transcribeResult {
-                guard case let .success(partialResult) = result else { continue }
-                let mergedPartialResult = TranscriptionUtilities.mergeTranscriptionResults(partialResult)
-                try reportCoordinateInterval.validate(result: mergedPartialResult)
+                switch result {
+                    case let .success(partialResult):
+                        let mergedPartialResult = TranscriptionUtilities.mergeTranscriptionResults(partialResult)
+                        try reportCoordinateInterval.validate(result: mergedPartialResult)
+                    case let .failure(error):
+                        if error is TranscriptionEmissionBoundError {
+                            throw error
+                        }
+                }
             }
         }
 

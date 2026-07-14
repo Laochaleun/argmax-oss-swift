@@ -6,6 +6,151 @@ import Foundation
 import XCTest
 
 final class ResultWriterEmissionBoundTests: XCTestCase {
+    func testPreEmissionBoundaryAcceptsClosedCoordinatesWithoutChangingThem() throws {
+        let interval = try AllowedCoordinateInterval(lowerBound: 0, upperBound: 10)
+        let segments = [
+            TranscriptionSegment(
+                start: 0,
+                end: 10,
+                text: "closed boundary",
+                words: [
+                    WordTiming(
+                        word: "boundary",
+                        tokens: [1],
+                        start: 10,
+                        end: 10,
+                        probability: 1
+                    ),
+                ]
+            ),
+        ]
+        let originalSegments = segments
+
+        try interval.validateBeforeEmission(
+            segments: segments,
+            segmentIndexOffset: 0,
+            windowSeek: 0,
+            windowSegmentSize: 160_000,
+            sampleRate: 16_000
+        )
+
+        XCTAssertEqual(segments, originalSegments)
+    }
+
+    func testPreEmissionBoundaryUsesProducerArithmeticAtNonzeroSeek() throws {
+        let windowSeek = 68_160
+        let windowSegmentSize = 480_000
+        let sampleRate = 16_000
+        let start = Float(windowSeek) / Float(sampleRate)
+        let end = start + Float(windowSegmentSize) / Float(sampleRate)
+        let interval = try AllowedCoordinateInterval(lowerBound: start, upperBound: end)
+        let segments = [
+            TranscriptionSegment(start: start, end: end, text: "exact producer boundary"),
+        ]
+
+        try interval.validateBeforeEmission(
+            segments: segments,
+            segmentIndexOffset: 0,
+            windowSeek: windowSeek,
+            windowSegmentSize: windowSegmentSize,
+            sampleRate: sampleRate
+        )
+    }
+
+    func testAllowedCoordinateIntervalDecodingRetainsValidation() throws {
+        let reversed = Data(#"{"lowerBound":10,"upperBound":0}"#.utf8)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(AllowedCoordinateInterval.self, from: reversed)
+        )
+    }
+
+    func testPreEmissionBoundaryRejectsSegmentAndWordViolations() throws {
+        let interval = try AllowedCoordinateInterval(lowerBound: 2, upperBound: 8)
+        let cases = [
+            TranscriptionSegment(start: 1.99, end: 3, text: "segment below"),
+            TranscriptionSegment(start: 3, end: 8.01, text: "segment above"),
+            TranscriptionSegment(
+                start: 2,
+                end: 8,
+                text: "word below",
+                words: [
+                    WordTiming(
+                        word: "below",
+                        tokens: [1],
+                        start: 1.99,
+                        end: 3,
+                        probability: 1
+                    ),
+                ]
+            ),
+            TranscriptionSegment(
+                start: 2,
+                end: 8,
+                text: "word above",
+                words: [
+                    WordTiming(
+                        word: "above",
+                        tokens: [1],
+                        start: 3,
+                        end: 8.01,
+                        probability: 1
+                    ),
+                ]
+            ),
+        ]
+
+        for segment in cases {
+            XCTAssertThrowsError(
+                try interval.validateBeforeEmission(
+                    segments: [segment],
+                    segmentIndexOffset: 7,
+                    windowSeek: 0,
+                    windowSegmentSize: 160_000,
+                    sampleRate: 16_000
+                )
+            )
+        }
+    }
+
+    func testPreEmissionBoundaryRejectsPaddedDecodeAxisOutsideRealWindow() throws {
+        let interval = try AllowedCoordinateInterval(lowerBound: 0, upperBound: 30)
+        let segment = TranscriptionSegment(
+            start: 9,
+            end: 10.02,
+            text: "padded decode axis",
+            words: [
+                WordTiming(
+                    word: "padded",
+                    tokens: [1],
+                    start: 9,
+                    end: 10,
+                    probability: 1
+                ),
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try interval.validateBeforeEmission(
+                segments: [segment],
+                segmentIndexOffset: 0,
+                windowSeek: 0,
+                windowSegmentSize: 160_000,
+                sampleRate: 16_000
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TranscriptionEmissionBoundError,
+                .segmentCoordinateOutsideAllowedInterval(
+                    segmentIndex: 0,
+                    start: 9,
+                    end: 10.02,
+                    lowerBound: 0,
+                    upperBound: 10
+                )
+            )
+        }
+    }
+
     func testEmissionBoundAcceptsClosedBoundariesAndPreservesCoordinates() throws {
         let outputDirectory = try makeOutputDirectory()
         defer { try? FileManager.default.removeItem(at: outputDirectory) }

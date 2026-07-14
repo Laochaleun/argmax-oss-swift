@@ -142,6 +142,7 @@ open class WhisperKitConfig {
 ///   - maxInitialTimestamp: Maximal initial timestamp.
 ///   - maxWindowSeek: If provided, prevents the seek in samples from exceeding this value for each window
 ///   - clipTimestamps: Array of timestamps (in seconds) to split the audio into segments for transcription.
+///   - allowedCoordinateInterval: Optional call-local closed interval enforced before segment emission.
 ///   - windowClipTime: Time in seconds to clip from the end of an audio window to help prevent hallucinations
 ///   - promptTokens: Array of token IDs to use as the conditioning prompt for the decoder. These are prepended to the prefill tokens.
 ///   - prefixTokens: Array of token IDs to use as the initial prefix for the decoder. These are appended to the prefill tokens.
@@ -169,6 +170,7 @@ public struct DecodingOptions: Codable, Sendable {
     public var maxInitialTimestamp: Float?
     public var maxWindowSeek: Int?
     public var clipTimestamps: [Float]
+    public var allowedCoordinateInterval: AllowedCoordinateInterval?
     public var windowClipTime: Float
     public var promptTokens: [Int]?
     public var prefixTokens: [Int]?
@@ -198,6 +200,7 @@ public struct DecodingOptions: Codable, Sendable {
         maxInitialTimestamp: Float? = nil,
         maxWindowSeek: Int? = nil,
         clipTimestamps: [Float] = [],
+        allowedCoordinateInterval: AllowedCoordinateInterval? = nil,
         windowClipTime: Float = 1.0,
         promptTokens: [Int]? = nil,
         prefixTokens: [Int]? = nil,
@@ -226,6 +229,7 @@ public struct DecodingOptions: Codable, Sendable {
         self.maxInitialTimestamp = maxInitialTimestamp
         self.maxWindowSeek = maxWindowSeek
         self.clipTimestamps = clipTimestamps
+        self.allowedCoordinateInterval = allowedCoordinateInterval
         self.windowClipTime = windowClipTime
         self.promptTokens = promptTokens
         self.prefixTokens = prefixTokens

@@ -37,6 +37,43 @@ public extension AudioChunking {
         }
         return updatedTranscriptionResults
     }
+
+    func updateSeekOffsetsForResults(
+        chunkedResults: [Result<[TranscriptionResult], Swift.Error>],
+        audioChunks: [AudioChunk],
+        allowedCoordinateInterval: AllowedCoordinateInterval
+    ) throws -> [TranscriptionResult] {
+        var updatedTranscriptionResults = [TranscriptionResult]()
+        var segmentIndexOffset = 0
+        for (index, chunkedResult) in chunkedResults.enumerated() {
+            switch chunkedResult {
+                case let .success(results):
+                    let seekTime = Float(audioChunks[index].seekOffsetIndex) / Float(WhisperKit.sampleRate)
+                    for result in results {
+                        var updatedSegments = [TranscriptionSegment]()
+                        for segment in result.segments {
+                            let updatedSegment = TranscriptionUtilities.updateSegmentTimings(
+                                segment: segment,
+                                seekTime: seekTime
+                            )
+                            updatedSegments.append(updatedSegment)
+                        }
+                        try allowedCoordinateInterval.validate(
+                            segments: updatedSegments,
+                            segmentIndexOffset: segmentIndexOffset
+                        )
+                        segmentIndexOffset += updatedSegments.count
+                        let updatedResult = result
+                        updatedResult.seekTime = seekTime
+                        updatedResult.segments = updatedSegments
+                        updatedTranscriptionResults.append(updatedResult)
+                    }
+                case let .failure(error):
+                    throw error
+            }
+        }
+        return updatedTranscriptionResults
+    }
 }
 
 /// A audio chunker that splits audio into smaller pieces based on voice activity detection
