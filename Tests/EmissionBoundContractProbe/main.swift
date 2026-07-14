@@ -11,6 +11,7 @@ struct EmissionBoundContractProbe {
         try proveRealAudioSelectionDomain()
         try proveTimestampSelectionBeforeSampling()
         try proveAlignmentRestrictionBeforeDTW()
+        try proveEmptyAlignmentRowsFailClosed()
         try await proveFallbackAndWindowDomains()
         try await proveSeventeenUnequalWorkers()
         try provePreEmissionBoundary()
@@ -182,6 +183,68 @@ struct EmissionBoundContractProbe {
         }
         for column in 0..<1_500 where fullBounded[column] != fullSource[column] {
             throw ProbeError("valid full-window alignment coordinate changed")
+        }
+    }
+
+    private static func proveEmptyAlignmentRowsFailClosed() throws {
+        let seeker = SegmentSeeker()
+        let alignmentWeights = try MLMultiArray(shape: [1, 2], dataType: .float16)
+        let domain = try makeDomain(samples: 321)
+        let emptySegment = TranscriptionSegment(
+            start: 0,
+            end: 0.02,
+            text: "",
+            tokens: [],
+            tokenLogProbs: []
+        )
+        let preserved = try seeker.addWordTimestamps(
+            segments: [emptySegment],
+            alignmentWeights: alignmentWeights,
+            tokenizer: ProbeTokenizer(),
+            seek: 0,
+            segmentSize: 321,
+            realAudioSelectionDomain: domain,
+            prependPunctuations: Constants.defaultPrependPunctuations,
+            appendPunctuations: Constants.defaultAppendPunctuations,
+            lastSpeechTimestamp: 0,
+            options: DecodingOptions(wordTimestamps: true),
+            timings: TranscriptionTimings()
+        )
+        guard preserved?.count == 1,
+              preserved?[0].start == emptySegment.start,
+              preserved?[0].end == emptySegment.end,
+              preserved?[0].text == emptySegment.text,
+              preserved?[0].tokens == emptySegment.tokens
+        else {
+            throw ProbeError("empty alignment control changed legal segment values")
+        }
+
+        let nonemptySegment = TranscriptionSegment(
+            start: 0,
+            end: 0.02,
+            text: "requires alignment",
+            tokens: [],
+            tokenLogProbs: []
+        )
+        do {
+            _ = try seeker.addWordTimestamps(
+                segments: [nonemptySegment],
+                alignmentWeights: alignmentWeights,
+                tokenizer: ProbeTokenizer(),
+                seek: 0,
+                segmentSize: 321,
+                realAudioSelectionDomain: domain,
+                prependPunctuations: Constants.defaultPrependPunctuations,
+                appendPunctuations: Constants.defaultAppendPunctuations,
+                lastSpeechTimestamp: 0,
+                options: DecodingOptions(wordTimestamps: true),
+                timings: TranscriptionTimings()
+            )
+            throw ProbeError("non-empty text without alignment rows was accepted")
+        } catch let error as ProbeError {
+            throw error
+        } catch {
+            // Expected fail-closed alignment rejection.
         }
     }
 

@@ -464,6 +464,13 @@ open class SegmentSeeker: SegmentSeeking {
 
         // Filter alignmentWeights using filteredIndices
         guard !filteredIndices.isEmpty else {
+            guard segments.allSatisfy({
+                $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }) else {
+                throw WhisperError.segmentingFailed(
+                    "Non-empty segment text has no legal token alignment rows"
+                )
+            }
             return segments
         }
 

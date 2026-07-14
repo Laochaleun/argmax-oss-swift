@@ -166,6 +166,63 @@ final class RealAudioSelectionDomainTests: XCTestCase {
         }
     }
 
+    func testNonemptyTextWithoutAlignmentRowsFailsClosed() throws {
+        let seeker = SegmentSeeker()
+        let alignmentWeights = try makeMatrix(rows: 1, columns: 2) { _, _ in 0 }
+        let domain = try makeDomain(samples: 321)
+        let nonemptySegment = TranscriptionSegment(
+            start: 0,
+            end: 0.02,
+            text: "requires alignment",
+            tokens: [],
+            tokenLogProbs: []
+        )
+
+        XCTAssertThrowsError(
+            try seeker.addWordTimestamps(
+                segments: [nonemptySegment],
+                alignmentWeights: alignmentWeights,
+                tokenizer: StubTokenizer(),
+                seek: 0,
+                segmentSize: 321,
+                realAudioSelectionDomain: domain,
+                prependPunctuations: Constants.defaultPrependPunctuations,
+                appendPunctuations: Constants.defaultAppendPunctuations,
+                lastSpeechTimestamp: 0,
+                options: DecodingOptions(wordTimestamps: true),
+                timings: TranscriptionTimings()
+            )
+        )
+
+        let emptySegment = TranscriptionSegment(
+            start: 0,
+            end: 0.02,
+            text: "",
+            tokens: [],
+            tokenLogProbs: []
+        )
+        let preserved = try XCTUnwrap(
+            seeker.addWordTimestamps(
+                segments: [emptySegment],
+                alignmentWeights: alignmentWeights,
+                tokenizer: StubTokenizer(),
+                seek: 0,
+                segmentSize: 321,
+                realAudioSelectionDomain: domain,
+                prependPunctuations: Constants.defaultPrependPunctuations,
+                appendPunctuations: Constants.defaultAppendPunctuations,
+                lastSpeechTimestamp: 0,
+                options: DecodingOptions(wordTimestamps: true),
+                timings: TranscriptionTimings()
+            )
+        )
+        XCTAssertEqual(preserved.count, 1)
+        XCTAssertEqual(preserved[0].start, emptySegment.start)
+        XCTAssertEqual(preserved[0].end, emptySegment.end)
+        XCTAssertEqual(preserved[0].text, emptySegment.text)
+        XCTAssertEqual(preserved[0].tokens, emptySegment.tokens)
+    }
+
     func testFallbacksReceiveOneImmutableDomainAndGuardRunsBeforeCallback() async throws {
         let decoder = RecordingTextDecoder(fallbackCount: 2)
         let callbackRecorder = SegmentCallbackRecorder()
