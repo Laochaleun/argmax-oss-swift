@@ -24,6 +24,7 @@ public protocol SegmentSeeking {
         tokenizer: WhisperTokenizer,
         seek: Int,
         segmentSize: Int,
+        realAudioSelectionDomain: RealAudioSelectionDomain,
         prependPunctuations: String,
         appendPunctuations: String,
         lastSpeechTimestamp: Float,
@@ -192,10 +193,12 @@ open class SegmentSeeker: SegmentSeeking {
 
     /// Matrix is a 2D array of alignment weights of shape (n, m) where n is the number of rows representing text tokens
     /// and m is the number of columns representing audio tokens
-    func dynamicTimeWarping(withMatrix matrix: MLMultiArray) throws -> (textIndices: [Int], timeIndices: [Int]) {
+    package func dynamicTimeWarping(withMatrix matrix: MLMultiArray) throws -> (textIndices: [Int], timeIndices: [Int]) {
         guard matrix.shape.count == 2,
               let numberOfRows = matrix.shape[0] as? Int,
-              let numberOfColumns = matrix.shape[1] as? Int
+              let numberOfColumns = matrix.shape[1] as? Int,
+              numberOfRows > 0,
+              numberOfColumns > 0
         else {
             throw WhisperError.segmentingFailed("Invalid alignment matrix shape")
         }
@@ -345,6 +348,9 @@ open class SegmentSeeker: SegmentSeeking {
         timings: TranscriptionTimings? = nil
     ) throws -> [WordTiming] {
         // TODO: Use accelerate framework for these two, they take roughly the same time
+        guard wordTokenIds.count == tokenLogProbs.count else {
+            throw WhisperError.segmentingFailed("Token and log-probability counts do not match")
+        }
         let (textIndices, timeIndices) = try dynamicTimeWarping(withMatrix: alignmentWeights)
         let (words, wordTokens) = tokenizer.splitToWordTokens(tokenIds: wordTokenIds)
 
@@ -368,7 +374,10 @@ open class SegmentSeeker: SegmentSeeking {
                 endTimes.append(time)
             }
         }
-        endTimes.append(Float(timeIndices.last ?? 1500) * Float(WhisperKit.secondsPerTimeToken))
+        guard let lastTimeIndex = timeIndices.last else {
+            throw WhisperError.segmentingFailed("Alignment produced no legal time index")
+        }
+        endTimes.append(Float(lastTimeIndex) * Float(WhisperKit.secondsPerTimeToken))
 
         var wordTimings = [WordTiming]()
         currentTokenIndex = 0
@@ -413,12 +422,15 @@ open class SegmentSeeker: SegmentSeeking {
         tokenizer: WhisperTokenizer,
         seek: Int,
         segmentSize: Int,
+        realAudioSelectionDomain: RealAudioSelectionDomain,
         prependPunctuations: String = Constants.defaultPrependPunctuations,
         appendPunctuations: String = Constants.defaultAppendPunctuations,
         lastSpeechTimestamp: Float,
         options: DecodingOptions,
         timings: TranscriptionTimings
     ) throws -> [TranscriptionSegment]? {
+        try realAudioSelectionDomain.validateWindow(seek: seek, segmentSize: segmentSize)
+
         // Initialize arrays to hold the extracted and filtered data
         var wordTokenIds = [Int]()
         var filteredLogProbs = [Float]()
@@ -427,6 +439,11 @@ open class SegmentSeeker: SegmentSeeking {
         // Iterate through each segment
         var indexOffset = 0
         for segment in segments {
+            guard segment.tokens.count == segment.tokenLogProbs.count else {
+                throw WhisperError.segmentingFailed(
+                    "Segment token and log-probability counts do not match"
+                )
+            }
             for (index, token) in segment.tokens.enumerated() {
                 wordTokenIds.append(token)
                 filteredIndices.append(index + indexOffset) // Add the index to filteredIndices
@@ -434,6 +451,10 @@ open class SegmentSeeker: SegmentSeeking {
                 // Assuming tokenLogProbs is structured as [[Int: Float]]
                 if let logProb = segment.tokenLogProbs[index][token] {
                     filteredLogProbs.append(logProb)
+                } else {
+                    throw WhisperError.segmentingFailed(
+                        "Missing token log probability for real-audio alignment"
+                    )
                 }
             }
 
@@ -442,30 +463,31 @@ open class SegmentSeeker: SegmentSeeking {
         }
 
         // Filter alignmentWeights using filteredIndices
-        let shape = alignmentWeights.shape
-        guard let columnCount = shape.last?.intValue else {
+        guard !filteredIndices.isEmpty else {
+            return segments
+        }
+
+        let shape = alignmentWeights.shape.map(\.intValue)
+        guard shape.count == 2,
+              shape[0] > 0,
+              shape[1] > 0,
+              filteredIndices.allSatisfy({ $0 >= 0 && $0 < shape[0] }),
+              wordTokenIds.count == filteredLogProbs.count
+        else {
             throw WhisperError.segmentingFailed("Invalid shape in alignmentWeights")
         }
+        let boundedAlignmentWeights = try prepareAlignmentWeightsForDTW(
+            alignmentWeights: alignmentWeights,
+            filteredRowIndices: filteredIndices,
+            realAudioSelectionDomain: realAudioSelectionDomain
+        )
 
-        let filteredAlignmentWeights = try MLMultiArray(shape: [filteredIndices.count, columnCount] as [NSNumber], dataType: alignmentWeights.dataType, initialValue: FloatType(0))
-
-        alignmentWeights.withUnsafeMutableBytes { weightsPointer, weightsStride in
-            filteredAlignmentWeights.withUnsafeMutableBytes { filteredWeightsPointer, filteredWeightsStride in
-                for (newIndex, originalIndex) in filteredIndices.enumerated() {
-                    let sourcePointer = weightsPointer.baseAddress!.advanced(by: Int(originalIndex * columnCount * MemoryLayout<FloatType>.stride))
-                    let destinationPointer = filteredWeightsPointer.baseAddress!.advanced(by: Int(newIndex * columnCount * MemoryLayout<FloatType>.stride))
-
-                    memcpy(destinationPointer, sourcePointer, columnCount * MemoryLayout<FloatType>.stride)
-                }
-            }
-        }
-
-        Logging.debug("Alignment weights shape: \(filteredAlignmentWeights.shape)")
+        Logging.debug("Alignment weights shape: \(boundedAlignmentWeights.shape)")
 
         // Find alignment between text tokens and time indices
         var alignment = try findAlignment(
             wordTokenIds: wordTokenIds,
-            alignmentWeights: filteredAlignmentWeights,
+            alignmentWeights: boundedAlignmentWeights,
             tokenLogProbs: filteredLogProbs,
             tokenizer: tokenizer,
             timings: timings
@@ -493,6 +515,43 @@ open class SegmentSeeker: SegmentSeeking {
         )
 
         return updatedSegments
+    }
+
+    package func prepareAlignmentWeightsForDTW(
+        alignmentWeights: MLMultiArray,
+        filteredRowIndices: [Int],
+        realAudioSelectionDomain: RealAudioSelectionDomain
+    ) throws -> MLMultiArray {
+        let shape = alignmentWeights.shape.map(\.intValue)
+        guard shape.count == 2,
+              shape[0] > 0,
+              shape[1] > 0,
+              !filteredRowIndices.isEmpty,
+              filteredRowIndices.allSatisfy({ $0 >= 0 && $0 < shape[0] })
+        else {
+            throw RealAudioSelectionDomainError.invalidAlignmentMatrixShape(shape)
+        }
+
+        let validColumnCount = try realAudioSelectionDomain.validAlignmentColumnCount(
+            matrixColumnCount: shape[1]
+        )
+        let boundedAlignmentWeights = try MLMultiArray(
+            shape: [
+                NSNumber(value: filteredRowIndices.count),
+                NSNumber(value: validColumnCount),
+            ],
+            dataType: alignmentWeights.dataType
+        )
+        for (newRow, originalRow) in filteredRowIndices.enumerated() {
+            for column in 0..<validColumnCount {
+                let sourceOffset = alignmentWeights.linearOffset(for: [originalRow, column])
+                let destinationOffset = boundedAlignmentWeights.linearOffset(
+                    for: [newRow, column]
+                )
+                boundedAlignmentWeights[destinationOffset] = alignmentWeights[sourceOffset]
+            }
+        }
+        return boundedAlignmentWeights
     }
 
     public func calculateWordDurationConstraints(alignment: [WordTiming]) -> (median: Float, max: Float) {

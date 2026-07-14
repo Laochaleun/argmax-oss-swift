@@ -84,6 +84,7 @@ public protocol TextDecoding {
         using decoderInputs: any DecodingInputsType,
         sampler tokenSampler: TokenSampling,
         options decoderOptions: DecodingOptions,
+        realAudioSelectionDomain: RealAudioSelectionDomain,
         callback: TranscriptionCallback?
     ) async throws -> DecodingResult
 
@@ -543,6 +544,7 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         using decoderInputs: any DecodingInputsType,
         sampler tokenSampler: TokenSampling,
         options: DecodingOptions,
+        realAudioSelectionDomain: RealAudioSelectionDomain,
         callback: TranscriptionCallback? = nil
     ) async throws -> DecodingResult {
         guard let tokenizer else {
@@ -559,7 +561,13 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         var logProbs: [Float] = Array(repeating: 0, count: currentTokens.count)
 
         // Logits filters
-        let logitsFilters = createLogitsFilters(options: options, prefilledIndex: prefilledIndex, initialPromptIndex: initialPromptIndex, tokenizer: tokenizer)
+        let logitsFilters = createLogitsFilters(
+            options: options,
+            prefilledIndex: prefilledIndex,
+            initialPromptIndex: initialPromptIndex,
+            tokenizer: tokenizer,
+            realAudioSelectionDomain: realAudioSelectionDomain
+        )
 
         // MARK: Main loop
 
@@ -569,6 +577,7 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         var isFirstTokenLogProbTooLow = false
         let windowUUID = UUID()
         await earlyStopActor.set(false, for: windowUUID)
+        var callbackTasks = [Task<Void, Never>]()
 
         for tokenIndex in prefilledIndex..<loopCount {
             let loopStart = Date()
@@ -640,6 +649,15 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
             var logits = decoderOutput.logits!
             for filter in logitsFilters {
                 logits = filter.filterLogits(logits, withTokens: currentTokens)
+            }
+            do {
+                try Self.validateLegalSelection(logits)
+            } catch {
+                for callbackTask in callbackTasks {
+                    await callbackTask.value
+                }
+                _ = await earlyStopActor.remove(for: windowUUID)
+                throw error
             }
 
             let filteringTime = Date().timeIntervalSince(nonInferenceStartTime)
@@ -731,13 +749,13 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
 
                 // Call the callback if it is provided on a background thread
                 if let callback = callback {
-                    Task.detached(priority: .low) { [earlyStopActor] in
+                    callbackTasks.append(Task.detached(priority: .low) { [earlyStopActor] in
                         let shouldContinue = callback(result)
                         if let shouldContinue = shouldContinue, !shouldContinue, !isPrefill {
                             Logging.debug("Early stopping")
                             await earlyStopActor.set(true, for: windowUUID)
                         }
-                    }
+                    })
                 }
             }
 
@@ -858,7 +876,8 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         options: DecodingOptions,
         prefilledIndex: Int,
         initialPromptIndex: Int,
-        tokenizer: WhisperTokenizer
+        tokenizer: WhisperTokenizer,
+        realAudioSelectionDomain: RealAudioSelectionDomain? = nil
     ) -> [any LogitsFiltering] {
         // Start with custom logits filters
         var allFilters: [any LogitsFiltering] = logitsFilters ?? []
@@ -876,6 +895,15 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         if !options.suppressTokens.isEmpty {
             let filteredSuppressTokens = options.suppressTokens.filter { $0 < tokenizer.specialTokens.specialTokenBegin }
             allFilters.append(SuppressTokensFilter(suppressTokens: filteredSuppressTokens))
+        }
+
+        if let realAudioSelectionDomain {
+            allFilters.append(
+                ValidTimestampDomainFilter(
+                    specialTokens: tokenizer.specialTokens,
+                    realAudioSelectionDomain: realAudioSelectionDomain
+                )
+            )
         }
 
         if !options.withoutTimestamps {
@@ -896,5 +924,12 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         }
         
         return allFilters
+    }
+
+    package static func validateLegalSelection(_ logits: MLMultiArray) throws {
+        for index in 0..<logits.count where logits[index].floatValue.isFinite {
+            return
+        }
+        throw RealAudioSelectionDomainError.noLegalDecoderSelectionPath
     }
 }

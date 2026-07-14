@@ -118,6 +118,12 @@ open class TranscribeTask {
                 // calculate new encoder segment features
                 let timeOffset = Float(seek) / Float(WhisperKit.sampleRate)
                 let segmentSize = min(windowSamples, contentFrames - seek, seekClipEnd - seek)
+                let realAudioSelectionDomain = try RealAudioSelectionDomain(
+                    seekSampleOffset: windowSeek,
+                    realSampleCount: segmentSize,
+                    sampleRate: WhisperKit.sampleRate,
+                    secondsPerTimeToken: WhisperKit.secondsPerTimeToken
+                )
                 let timeOffsetEnd = Float(seek + segmentSize) / Float(WhisperKit.sampleRate)
                 Logging.debug("Decoding Seek: \(seek) (\(Logging.formatTimestamp(timeOffset))s)")
                 Logging.debug("Decoding Window Size: \(segmentSize) (\(Logging.formatTimestamp(timeOffsetEnd - timeOffset))s)")
@@ -169,6 +175,7 @@ open class TranscribeTask {
                     decodingOptions: options,
                     decoderInputs: &decoderInputs,
                     detectedLanguage: &detectedLanguage,
+                    realAudioSelectionDomain: realAudioSelectionDomain,
                     callback: decodingCallback
                 )
 
@@ -216,6 +223,7 @@ open class TranscribeTask {
                         tokenizer: tokenizer,
                         seek: previousSeek,
                         segmentSize: segmentSize,
+                        realAudioSelectionDomain: realAudioSelectionDomain,
                         prependPunctuations: Constants.defaultPrependPunctuations,
                         appendPunctuations: Constants.defaultAppendPunctuations,
                         lastSpeechTimestamp: Float(Double(previousSeek) / Double(WhisperKit.sampleRate)),
@@ -352,6 +360,7 @@ open class TranscribeTask {
         decodingOptions options: DecodingOptions,
         decoderInputs: inout any DecodingInputsType,
         detectedLanguage: inout String?,
+        realAudioSelectionDomain: RealAudioSelectionDomain,
         callback: TranscriptionCallback? = nil
     ) async throws -> DecodingResult {
         let interval = Logging.beginSignpost("Decode", signposter: Logging.TranscribeTask.signposter)
@@ -403,6 +412,7 @@ open class TranscribeTask {
                 using: decoderInputs,
                 sampler: tokenSampler,
                 options: currentDecodingOptions,
+                realAudioSelectionDomain: realAudioSelectionDomain,
                 callback: callback
             )
 

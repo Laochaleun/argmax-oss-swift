@@ -738,24 +738,24 @@ open class WhisperKit {
         // If concurrentWorkerCount is 0, all audio arrays are processed in one batch
         let batchedAudioArrays = concurrentWorkerCount == 0 ? [audioArrays] : audioArrays.batched(into: concurrentWorkerCount)
 
-        for (batchIndex, audioArrayBatch) in batchedAudioArrays.enumerated() {
+        for audioArrayBatch in batchedAudioArrays {
+            let batchStartIndex = result.count
             // Use withTaskGroup to manage concurrent transcription tasks
             let partialResult = await withTaskGroup(of: [(index: Int, result: Result<[TranscriptionResult], Swift.Error>)].self) { taskGroup -> [Result<[TranscriptionResult], Swift.Error>] in
                 for (audioIndex, audioArray) in audioArrayBatch.enumerated() {
-                    let batchSize = audioArrayBatch.count
+                    let globalAudioIndex = batchStartIndex + audioIndex
 
                     // Setup callback to keep track of batches and chunks
                     let batchedAudioCallback: TranscriptionCallback = { progress in
                         var batchedProgress = progress
-                        batchedProgress.windowId = audioIndex + batchIndex * batchSize
+                        batchedProgress.windowId = globalAudioIndex
                         return callback?(batchedProgress)
                     }
 
                     // Setup segment callback to track chunk seek positions for segment discovery
                     let batchedSegmentCallback: SegmentDiscoveryCallback? = if let seekOffsets {
                         { [segmentDiscoveryCallback] segments in
-                            let windowId = audioIndex + batchIndex * batchSize
-                            let seekOffset = seekOffsets[windowId]
+                            let seekOffset = seekOffsets[globalAudioIndex]
                             var adjustedSegments = segments
                             for i in 0..<adjustedSegments.count {
                                 adjustedSegments[i].seek += Int(seekOffset)
@@ -767,14 +767,14 @@ open class WhisperKit {
                     }
 
                     // Setup decoding options for the current audio array
-                    let batchedDecodeOptions = decodeOptionsArray[audioIndex]
+                    let batchedDecodeOptions = decodeOptionsArray[globalAudioIndex]
 
                     // Add a new task to the task group for each audio array
                     let weakSelf = WeakSendableWrapper(self)
                     taskGroup.addTask {
                         do {
                             guard let self = weakSelf.value else {
-                                return [(index: audioIndex, result: .failure(WhisperError.transcriptionFailed("WhisperKit instance was deallocated")))]
+                                return [(index: globalAudioIndex, result: .failure(WhisperError.transcriptionFailed("WhisperKit instance was deallocated")))]
                             }
                             let transcribeResult: [TranscriptionResult] = try await self.transcribe(
                                 audioArray: audioArray,
@@ -783,10 +783,10 @@ open class WhisperKit {
                                 segmentCallback: batchedSegmentCallback
                             )
                             // Return the successful transcription result with its index
-                            return [(index: audioIndex, result: .success(transcribeResult))]
+                            return [(index: globalAudioIndex, result: .success(transcribeResult))]
                         } catch {
                             // Return the failure result with its index in case of an error
-                            return [(index: audioIndex, result: .failure(error))]
+                            return [(index: globalAudioIndex, result: .failure(error))]
                         }
                     }
                 }

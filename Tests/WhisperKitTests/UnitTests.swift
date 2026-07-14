@@ -760,7 +760,13 @@ final class UnitTests: XCTestCase {
                 from: encoderInput,
                 using: inputs,
                 sampler: tokenSampler,
-                options: decodingOptions
+                options: decodingOptions,
+                realAudioSelectionDomain: try RealAudioSelectionDomain(
+                    seekSampleOffset: 0,
+                    realSampleCount: 480_000,
+                    sampleRate: WhisperKit.sampleRate,
+                    secondsPerTimeToken: WhisperKit.secondsPerTimeToken
+                )
             )
         )
     }
@@ -782,7 +788,18 @@ final class UnitTests: XCTestCase {
 
         let encoderInput = try MLMultiArray(shape: [1, 384, 1, 1500], dataType: .float16, initialValue: FloatType(0))
         let inputs = try textDecoder.prepareDecoderInputs(withPrompt: [textDecoder.tokenizer!.specialTokens.startOfTranscriptToken])
-        let decoderOutput = try await textDecoder.decodeText(from: encoderInput, using: inputs, sampler: tokenSampler, options: decodingOptions)
+        let decoderOutput = try await textDecoder.decodeText(
+            from: encoderInput,
+            using: inputs,
+            sampler: tokenSampler,
+            options: decodingOptions,
+            realAudioSelectionDomain: try RealAudioSelectionDomain(
+                seekSampleOffset: 0,
+                realSampleCount: 480_000,
+                sampleRate: WhisperKit.sampleRate,
+                secondsPerTimeToken: WhisperKit.secondsPerTimeToken
+            )
+        )
 
         let fallback = try XCTUnwrap(decoderOutput.fallback, "Fallback should not be `nil`")
         XCTAssertEqual(fallback.fallbackReason, "logProbThreshold")
@@ -806,7 +823,18 @@ final class UnitTests: XCTestCase {
 
         let encoderInput = try MLMultiArray(shape: [1, 384, 1, 1500], dataType: .float16, initialValue: FloatType(0))
         let inputs = try textDecoder.prepareDecoderInputs(withPrompt: [textDecoder.tokenizer!.specialTokens.startOfTranscriptToken])
-        let decoderOutput = try await textDecoder.decodeText(from: encoderInput, using: inputs, sampler: tokenSampler, options: decodingOptions)
+        let decoderOutput = try await textDecoder.decodeText(
+            from: encoderInput,
+            using: inputs,
+            sampler: tokenSampler,
+            options: decodingOptions,
+            realAudioSelectionDomain: try RealAudioSelectionDomain(
+                seekSampleOffset: 0,
+                realSampleCount: 480_000,
+                sampleRate: WhisperKit.sampleRate,
+                secondsPerTimeToken: WhisperKit.secondsPerTimeToken
+            )
+        )
 
         let fallback = try XCTUnwrap(decoderOutput.fallback, "Fallback should not be `nil`")
         XCTAssertEqual(fallback.fallbackReason, "firstTokenLogProbThreshold")

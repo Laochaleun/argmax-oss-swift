@@ -50,6 +50,49 @@ open class SuppressBlankFilter: LogitsFiltering {
     }
 }
 
+/// Suppresses timestamp tokens outside one producer-derived real-audio window.
+/// This filter is composed before timestamp probability aggregation and sampling.
+package final class ValidTimestampDomainFilter: LogitsFiltering {
+    private let specialTokens: SpecialTokens
+    private let realAudioSelectionDomain: RealAudioSelectionDomain
+
+    package init(
+        specialTokens: SpecialTokens,
+        realAudioSelectionDomain: RealAudioSelectionDomain
+    ) {
+        self.specialTokens = specialTokens
+        self.realAudioSelectionDomain = realAudioSelectionDomain
+    }
+
+    package func filterLogits(_ logits: MLMultiArray, withTokens tokens: [Int]) -> MLMultiArray {
+        let timeTokenBegin = specialTokens.timeTokenBegin
+        guard timeTokenBegin >= 0,
+              timeTokenBegin < logits.count
+        else {
+            logits.fillLastDimension(indexes: 0..<logits.count, with: -FloatType.infinity)
+            return logits
+        }
+
+        let availableTimestampTokenCount = logits.count - timeTokenBegin
+        if realAudioSelectionDomain.maximumTimestampTokenOffset < availableTimestampTokenCount - 1 {
+            let firstIllegalTimestampToken =
+                timeTokenBegin + realAudioSelectionDomain.maximumTimestampTokenOffset + 1
+            logits.fillLastDimension(
+                indexes: firstIllegalTimestampToken..<logits.count,
+                with: -FloatType.infinity
+            )
+        }
+
+        if tokens.contains(where: {
+            $0 >= timeTokenBegin &&
+                $0 - timeTokenBegin > realAudioSelectionDomain.maximumTimestampTokenOffset
+        }) {
+            logits.fillLastDimension(indexes: 0..<logits.count, with: -FloatType.infinity)
+        }
+        return logits
+    }
+}
+
 /// Implementation based on https://github.com/openai/whisper/blob/master/whisper/decoding.py#L441
 open class TimestampRulesFilter: LogitsFiltering {
     let specialTokens: SpecialTokens
