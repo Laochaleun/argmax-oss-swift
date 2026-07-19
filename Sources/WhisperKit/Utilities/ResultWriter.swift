@@ -229,6 +229,11 @@ open class WriteJSON: ResultWriting {
         let reportURL = reportPathURL.appendingPathComponent("\(file).json")
         let jsonEncoder = JSONEncoder()
         jsonEncoder.outputFormatting = .prettyPrinted
+        jsonEncoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
         do {
             let reportJson = try jsonEncoder.encode(result)
             try reportJson.write(to: reportURL, options: .atomic)

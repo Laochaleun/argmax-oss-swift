@@ -331,6 +331,75 @@ final class ResultWriterEmissionBoundTests: XCTestCase {
         )
     }
 
+    func testDiagnosticNonFiniteFloatsEncodeDeterministicallyWithoutChangingSRT() throws {
+        let outputDirectory = try makeOutputDirectory()
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+        let result = makeResult(
+            segments: [
+                TranscriptionSegment(
+                    id: 7,
+                    start: 1.25,
+                    end: 2.5,
+                    text: "diagnostic values",
+                    tokenLogProbs: [[42: .infinity]],
+                    temperature: .infinity,
+                    avgLogprob: -.infinity,
+                    compressionRatio: 1.5,
+                    noSpeechProb: .nan,
+                    words: [
+                        WordTiming(
+                            word: "diagnostic",
+                            tokens: [42],
+                            start: 1.25,
+                            end: 2.5,
+                            probability: .nan
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        let writeResult = BoundedTranscriptionReportWriter(
+            outputDir: outputDirectory.path
+        ).write(
+            result: result,
+            to: "diagnostics",
+            allowedCoordinateInterval: try AllowedCoordinateInterval(
+                lowerBound: 0,
+                upperBound: 3
+            )
+        )
+        guard case let .success(paths) = writeResult else {
+            return XCTFail("Expected diagnostic report publication to succeed: \(writeResult)")
+        }
+
+        let srt = try String(contentsOfFile: try filePath(paths.srt), encoding: .utf8)
+        XCTAssertEqual(
+            srt,
+            "1\n00:00:01,250 --> 00:00:02,500\ndiagnostic\n\n"
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: try filePath(paths.json)))
+            ) as? [String: Any]
+        )
+        let segment = try XCTUnwrap((object["segments"] as? [[String: Any]])?.first)
+        XCTAssertEqual(segment["text"] as? String, "diagnostic values")
+        XCTAssertEqual(segment["start"] as? Double, 1.25)
+        XCTAssertEqual(segment["end"] as? Double, 2.5)
+        XCTAssertEqual(segment["compressionRatio"] as? Double, 1.5)
+        XCTAssertEqual(segment["temperature"] as? String, "Infinity")
+        XCTAssertEqual(segment["avgLogprob"] as? String, "-Infinity")
+        XCTAssertEqual(segment["noSpeechProb"] as? String, "NaN")
+        let tokenLogProbs = try XCTUnwrap(segment["tokenLogProbs"] as? [[String: Any]])
+        XCTAssertEqual(tokenLogProbs[0]["42"] as? String, "Infinity")
+        let word = try XCTUnwrap((segment["words"] as? [[String: Any]])?.first)
+        XCTAssertEqual(word["word"] as? String, "diagnostic")
+        XCTAssertEqual(word["start"] as? Double, 1.25)
+        XCTAssertEqual(word["end"] as? Double, 2.5)
+        XCTAssertEqual(word["probability"] as? String, "NaN")
+    }
+
     private func makeResult(segments: [TranscriptionSegment]) -> TranscriptionResult {
         TranscriptionResult(
             text: segments.map(\.text).joined(separator: " "),
